@@ -2,8 +2,8 @@ name: GLaDOS Daily Checkin
 
 on:
   schedule:
-    - cron: '25 * * * *'      # 北京时间每天 0:05
-  #workflow_dispatch:           # 保留手动触发
+    - cron: '33 17 * * *'      # 北京时间每天 0:05
+  workflow_dispatch:           # 保留手动触发
 
 jobs:
   checkin:

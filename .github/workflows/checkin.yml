@@ -1,0 +1,28 @@
+name: GLaDOS Daily Checkin
+
+on:
+  schedule:
+    - cron: '5 16 * * *'      # 北京时间每天 0:05
+  workflow_dispatch:           # 保留手动触发
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests winotify
+      - name: Run checkin
+        env:
+          GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
+          GLADOS_EXCHANGE_PLAN: ${{ secrets.GLADOS_EXCHANGE_PLAN }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: python GLaDOS_Checkin.py

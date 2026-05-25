@@ -31,7 +31,7 @@ jobs:
   keepalive:
     runs-on: ubuntu-latest
     needs: checkin   # 可选：等签到完成后再执行保活，避免任务失败
-    if: github.event_name == 'schedule'   # 只在定时触发时运行，手动触发跳过
+    #if: github.event_name == 'schedule'   # 只在定时触发时运行，手动触发跳过
     steps:
       - uses: actions/checkout@v4
         with:

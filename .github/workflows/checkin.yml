@@ -2,8 +2,9 @@ name: GLaDOS Daily Checkin
 
 on:
   schedule:
-    - cron: '25 16 * * *'      # 北京时间每天 0:05
-  workflow_dispatch:           # 保留手动触发
+    # 每天北京时间 0:05 触发（UTC 16:05）
+    - cron: '25 16 * * *'
+  workflow_dispatch:   # 支持手动触发
 
 jobs:
   checkin:
@@ -25,4 +26,35 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
-        run: python GLaDOS_Checkin.py
+        run: python GlaDOS_Checkin.py
+
+  keepalive:
+    runs-on: ubuntu-latest
+    needs: checkin   # 可选：等签到完成后再执行保活，避免任务失败
+    if: github.event_name == 'schedule'   # 只在定时触发时运行，手动触发跳过
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check if today is 8, 18, or 28
+        id: date_check
+        run: |
+          # 获取当前北京时间的日期（UTC+8）
+          DAY=$(TZ='Asia/Shanghai' date +%d)
+          if [[ "$DAY" == "08" || "$DAY" == "18" || "$DAY" == "26" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Update keepalive file
+        if: steps.date_check.outputs.should_run == 'true'
+        run: |
+          echo "Last kept alive at $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" > keepalive.txt
+      - name: Commit and push
+        if: steps.date_check.outputs.should_run == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add keepalive.txt
+          git diff --quiet && git diff --staged --quiet || git commit -m "chore: keepalive on $(date +%Y%m%d)"
+          git push

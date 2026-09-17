@@ -10,6 +10,7 @@
 # 详细配置说明见 README.md
 from __future__ import annotations
 
+import hashlib
 import os
 import smtplib
 import sys
@@ -580,17 +581,48 @@ def get_points_history(cookie: str, limit: int = 7) -> Tuple[int, List[Dict[str,
         return 0, []
 
 
-def get_remaining_days(cookie: str) -> str:
-    """获取剩余服务天数，失败返回「获取失败」"""
+def _short_hash(value: str) -> str:
+    """短哈希：用于比对两个账号是否同一个，不泄露原文"""
+    return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def _find_identity(data: Dict[str, object]) -> str:
+    """从 status 返回里找出能标识账号的字段（不同版本字段名可能不一样）"""
+    for key in ("email", "mail", "userEmail", "user_email", "username", "user", "name", "uid", "id"):
+        value = data.get(key)
+        if isinstance(value, (str, int)) and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def get_status_info(cookie: str) -> Tuple[str, str]:
+    """
+    查询账号状态。
+    返回 (剩余天数文本, 账号指纹)
+    账号指纹 = Cookie 哈希/账号字段哈希的短哈希，只用来确认「多个账号填的是不是同一个号」，
+    仓库是公开的，所以这里不放 Cookie 或邮箱原文。
+    """
     try:
         status_resp = requests.get(STATUS_URL, headers=_glados_headers(cookie), timeout=10)
         if status_resp.status_code == 200:
             status_data = status_resp.json()
-            left_days = status_data.get("data", {}).get("leftDays", "0")
-            return f"{int(float(left_days))} 天"
+            data = status_data.get("data", {}) or {}
+            left_days = data.get("leftDays", "0")
+            identity = _find_identity(data)
+            fingerprint = f"cookie:{_short_hash(cookie)}"
+            if identity:
+                fingerprint += f" 账号:{_short_hash(identity)}"
+            else:
+                fingerprint += f" 账号:未识别(status 字段: {','.join(sorted(data.keys()))[:60]})"
+            return f"{int(float(left_days))} 天", fingerprint
     except Exception as e:
         print(f"  获取剩余天数失败: {e}")
-    return "获取失败"
+    return "获取失败", f"cookie:{_short_hash(cookie)} 账号:查询失败"
+
+
+def get_remaining_days(cookie: str) -> str:
+    """获取剩余服务天数，失败返回「获取失败」"""
+    return get_status_info(cookie)[0]
 
 
 def do_checkin(cookie: str) -> Tuple[int, bool, str, Optional[int]]:
@@ -675,7 +707,8 @@ def run_account(account: Account, global_raw: Dict[str, str], label: str) -> Dic
     """处理一个账号：签到 -> 兑换 -> 发信，返回结果字典"""
     points_gained, success, checkin_msg, _ = do_checkin(account.cookie)
 
-    remaining_days_str = get_remaining_days(account.cookie)
+    remaining_days_str, identity_fingerprint = get_status_info(account.cookie)
+    print(f"  账号指纹: {identity_fingerprint}")
     current_points, history = get_points_history(account.cookie, 7)
 
     plan_name, required_points, exchange_days = resolve_plan(account.plan)

@@ -413,6 +413,24 @@ def build_email_html(subject, message, account_label="", exchange_msg="", remain
     return "".join(html_parts)
 
 
+def _mask_email(address: str) -> str:
+    """
+    邮箱打码，用于日志输出。
+    Action 日志在公开仓库里任何人都能看，所以不在日志里放完整收件人地址。
+    """
+    address = (address or "").strip()
+    if "@" not in address:
+        return "***" if address else ""
+    local, _, domain = address.partition("@")
+    keep = local[:2] if len(local) > 2 else local[:1]
+    return f"{keep}***@{domain}"
+
+
+def _mask_recipients(receivers: List[str]) -> str:
+    """把收件人列表打码成可直接打日志的文本"""
+    return ", ".join(_mask_email(r) for r in receivers)
+
+
 def send_email_resend(mail: MailSettings, receivers: List[str], subject: str, html_content: str) -> bool:
     """通过 Resend HTTP API 发信"""
     payload = {
@@ -467,7 +485,7 @@ def send_email_smtp(mail: MailSettings, receivers: List[str], subject: str, html
         server.login(mail.smtp_user, mail.smtp_pass)
         server.sendmail(mail.smtp_user, receivers, msg.as_string())
         server.quit()
-        print(f"  SMTP 发信成功：{', '.join(receivers)}")
+        print(f"  SMTP 发信成功：{_mask_recipients(receivers)}")
         return True
     except Exception as e:
         print(f"  SMTP 发信失败：{e}")
@@ -488,7 +506,7 @@ def send_email(mail: MailSettings, receivers: List[str], subject: str, html_cont
         print(f"  邮件配置不完整（缺少 {'、'.join(missing)}），跳过邮件发送")
         return False
 
-    print(f"  正在通过 {mail.provider} 向 {', '.join(receivers)} 发送邮件...")
+    print(f"  正在通过 {mail.provider} 向 {_mask_recipients(receivers)} 发送邮件...")
     if mail.provider == "resend":
         return send_email_resend(mail, receivers, subject, html_content)
     return send_email_smtp(mail, receivers, subject, html_content)

@@ -16,22 +16,33 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install requests winotify
+        run: pip install requests
       - name: Run checkin
         env:
+          # 方式一：一个 secret 搞定（推荐，格式见 README）
+          GLADOS_CONFIG: ${{ secrets.GLADOS_CONFIG }}
+          # 方式二：拆分的 secrets（GLADOS_CONFIG 里没写的项会从这里兜底）
+          GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES }}
           GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
           GLADOS_EXCHANGE_PLAN: ${{ secrets.GLADOS_EXCHANGE_PLAN }}
-          MAIL_USER: ${{ secrets.MAIL_USER }}
-          MAIL_PASS: ${{ secrets.MAIL_PASS }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
+          # 发信：Resend（推荐）
+          MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          # 发信：SMTP（普通邮箱）
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          # 收件人
+          MAIL_TO: ${{ secrets.MAIL_TO }}
         run: python GLaDOS_Checkin.py
 
   keepalive:
     runs-on: ubuntu-latest
     needs: checkin   # 可选：等签到完成后再执行保活，避免任务失败
-    #if: github.event_name == 'schedule'   # 只在定时触发时运行，手动触发跳过
+    # 签到/发信失败时也照常保活，避免仓库被判定为不活跃
+    if: always()
     steps:
       - uses: actions/checkout@v4
         with:

@@ -25,15 +25,15 @@ jobs:
           GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES }}
           GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
           GLADOS_EXCHANGE_PLAN: ${{ secrets.GLADOS_EXCHANGE_PLAN }}
-          # 发信：Resend（推荐）
-          MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          # 发信：SMTP（普通邮箱）
+          # 发信：SMTP（推荐，普通邮箱授权码）
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          # 发信：Resend（可选，未验证域名时只能发给自己注册用的邮箱）
+          MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
           # 收件人
           MAIL_TO: ${{ secrets.MAIL_TO }}
         run: python GLaDOS_Checkin.py

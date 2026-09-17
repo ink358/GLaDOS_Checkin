@@ -4,7 +4,8 @@
 # 功能：
 #   1. 支持一个或多个 GLaDOS 账号签到（每个账号独立 Cookie、独立兑换计划）
 #   2. 每个账号的签到结果「分别」发送邮件，可发给一个或多个收件人
-#   3. 发信支持 Resend API（推荐，https://resend.com/）和 SMTP（QQ/163/Gmail 等普通邮箱）
+#   3. 发信支持 SMTP（推荐，QQ/163/Gmail 等普通邮箱授权码，收件人不受限）
+#      和 Resend API（可选，未验证自有域名时只能发给注册 Resend 用的那个邮箱）
 #   4. 配置既可以用「一个 secret 搞定」（GLADOS_CONFIG），也可以拆成一组 secrets
 #
 # 详细配置说明见 README.md
@@ -442,8 +443,8 @@ def send_email_resend(mail: MailSettings, receivers: List[str], subject: str, ht
         return True
 
     detail = resp.text
-    if resp.status_code == 403:
-        detail += "（提示：未验证域名时，只能用 onboarding@resend.dev 发给自己注册 Resend 时用的邮箱）"
+    if resp.status_code == 403 and "own email address" in detail:
+        detail += "（Resend 未验证域名时只能发给注册 Resend 用的邮箱；想发给别的地址，把 provider 改成 smtp 即可）"
     print(f"  Resend 发信失败 [{resp.status_code}]：{detail[:500]}")
     return False
 

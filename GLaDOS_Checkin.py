@@ -184,8 +184,12 @@ KNOWN_CONFIG_KEYS = {
     "user", "smtp_user", "mail_user",
     "pass", "password", "smtp_pass", "mail_pass", "auth_code", "authorization_code",
 }
-# GLaDOS 登录后的会话 Cookie 名（成对出现，缺一个就是未登录）
-SESSION_COOKIE_NAMES = ("koa:sess", "gld:sess")
+# GLaDOS 登录后的会话 Cookie 名（成对出现，缺一个就是未登录）。
+# 注意：GLaDOS 现已改用 gld:sess 判断登录态，只带老式的 koa:sess 一定返回「没有权限」
+# （实测：有效 koa:sess 单独发送 → 没有权限；有效 gld:sess 单独发送 → 正常返回账号数据）。
+SESSION_COOKIE_NAME = "gld:sess"
+LEGACY_COOKIE_NAME = "koa:sess"
+SESSION_COOKIE_NAMES = (SESSION_COOKIE_NAME, LEGACY_COOKIE_NAME)
 
 
 def check_cookie_shape(cookie: str) -> List[str]:
@@ -196,12 +200,13 @@ def check_cookie_shape(cookie: str) -> List[str]:
     cookie = cookie or ""
     warnings: List[str] = []
 
-    if not any(name in cookie for name in SESSION_COOKIE_NAMES):
-        warnings.append("Cookie 里既没有 koa:sess 也没有 gld:sess，不像是登录后的会话 Cookie")
-
-    for name in SESSION_COOKIE_NAMES:
-        if name in cookie and f"{name}.sig" not in cookie:
-            warnings.append(f"缺少 {name}.sig：签名 Cookie 必须成对，少一个服务端一定判为未登录")
+    if f"{SESSION_COOKIE_NAME}=" not in cookie:
+        warnings.append(
+            f"Cookie 里没有 {SESSION_COOKIE_NAME}：GLaDOS 现在按 {SESSION_COOKIE_NAME} 判断登录态，"
+            f"只有 {LEGACY_COOKIE_NAME} 无法通过认证，请重新登录后复制包含 {SESSION_COOKIE_NAME} 的完整 Cookie"
+        )
+    elif f"{SESSION_COOKIE_NAME}.sig" not in cookie:
+        warnings.append(f"缺少 {SESSION_COOKIE_NAME}.sig：签名 Cookie 必须成对，少一个服务端一定判为未登录")
 
     # 同一个名字出现两次且值不同 = 两次复制混在了一起
     seen: Dict[str, str] = {}
@@ -923,6 +928,12 @@ def check_cookie_cli(cookie: str) -> int:
 
     print("== 仅校验 Cookie（只读，不会执行签到）==")
 
+    has_session = f"{SESSION_COOKIE_NAME}=" in cookie
+    print(
+        f"   会话 Cookie {SESSION_COOKIE_NAME}：{'有 ✅' if has_session else '没有 ❌'}"
+        + (f"（另外带了 {LEGACY_COOKIE_NAME}，它已不用于认证）" if f"{LEGACY_COOKIE_NAME}=" in cookie else "")
+    )
+
     shape_warnings = check_cookie_shape(cookie)
     if shape_warnings:
         print("⚠️  Cookie 本身就有问题，先修这些：")
@@ -931,7 +942,7 @@ def check_cookie_cli(cookie: str) -> int:
         print("   复制方法：F12 → Network → 点一个 glados.one 的 api/user/... 请求 →")
         print("   把「请求头」里 Cookie 那一行完整复制（网络面板里的值一定是完整、带分隔符的）。")
     else:
-        print("   Cookie 格式看起来正常（会话 Cookie 成对、没有粘连）")
+        print("   Cookie 格式看起来正常（gld:sess 成对、没有粘连）")
 
     try:
         resp = requests.get(STATUS_URL, headers=_glados_headers(cookie), timeout=15)

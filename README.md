@@ -24,7 +24,21 @@
 
 浏览器登录 `https://glados.one`，F12 → Network → 随便点一个 `api/user/...` 请求 → 复制请求头里的 `Cookie` 整行（形如 `koa:sess=xxxx; koa:sess.sig=yyyy`）。
 
+要点：
+
+- **两个值都要，且必须是同一时刻复制的一组。** `koa:sess` 和 `koa:sess.sig` 是一对，浏览器每发一次请求都可能刷新它们；用旧的 `koa:sess` 配新的 `.sig` 会签名校验失败，服务器只会回一句「没有权限」。
+- **别用 `document.cookie`。** `koa:sess` 是 HttpOnly 的，控制台里看不到，抓出来的会是残缺 Cookie。用 Network 面板的请求头，或 Application → Cookies。
+- **抓完就存，别再来回刷新。** 复制之后浏览器又登录过/退出过，这个会话可能已经被服务端作废。
+
 > Cookie 等于账号密码，不要提交到仓库、不要发给别人。过期了就重新抓一次，更新 secret 即可。
+
+拿不准新 Cookie 能不能用？先本地验一下（只读，不会签到、不消耗当天次数）：
+
+```bash
+python GLaDOS_Checkin.py --check-cookie "koa:sess=xxxx; koa:sess.sig=yyyy"
+```
+
+有效会打印登录账号、剩余天数、当前积分；无效会直接告诉你是缺了 `.sig`，还是两个值不是同一时刻复制的。
 
 ### 怎么拿 SMTP 授权码（推荐）
 
@@ -169,6 +183,9 @@ koa:sess=a3; koa:sess.sig=b3
 ```bash
 pip install requests
 
+# 只想确认某个 Cookie 还有效（只读，不签到）：
+python GLaDOS_Checkin.py --check-cookie "koa:sess=xxxx; koa:sess.sig=yyyy"
+
 # 把配置文本存成 config.local.txt 后：
 GLADOS_CONFIG_FILE=config.local.txt python GLaDOS_Checkin.py
 ```
@@ -180,6 +197,7 @@ GLADOS_COOKIE='koa:sess=...' MAIL_USER='you@qq.com' MAIL_PASS='授权码' MAIL_T
 ```
 
 > 本地调试用的配置文件不要提交（`.gitignore` 已忽略 `config.local.*`）。
+> 想避免 Cookie 留在 shell 历史里，可以用 `--check-cookie` 不带参数，然后从标准输入粘贴。
 
 ---
 
@@ -203,8 +221,19 @@ GLADOS_COOKIE='koa:sess=...' MAIL_USER='you@qq.com' MAIL_PASS='授权码' MAIL_T
 **Q：邮件里写「今日已签到，明天再来吧」，是失败吗？**
 不是。重复签到算成功，只是没有新积分。
 
+**Q：日志写「签到失败：…没有权限」，或者指纹显示「认证失败」，怎么办？**
+
+这是 Cookie 没通过 GLaDOS 认证。注意 GLaDOS 不会返回 401，而是 **HTTP 200 + `{"code":-2,"message":"没有权限"}`**——所以哪怕 Cookie 完全是空的，站点也返回同样的东西。按顺序排查：
+
+1. 只复制了 `koa:sess`，漏了 `koa:sess.sig`（必须成对）；
+2. 两个值不是同一时刻复制的（浏览器一动就会刷新这两条，旧值配新签名必然失败）；
+3. 复制之后浏览器又登录过/退出过，会话已被服务端作废；
+4. 域名不对：本脚本用 `glados.one`，其它域名是另一套会话。
+
+本地跑 `python GLaDOS_Checkin.py --check-cookie "<你的 Cookie>"` 可以直接确认，不用等 Actions。
+
 **Q：提示 Cookie 不含 `koa:sess`？**
-Cookie 复制不完整或已失效，重新抓一次完整 Cookie 并更新 secret。
+Cookie 复制不完整或已失效。`koa:sess` 是 HttpOnly 的，用 `document.cookie` 取不到，请从 Network 面板的请求头或 Application → Cookies 重新抓一份完整 Cookie，先本地 `--check-cookie` 验一下再更新 secret。
 
 **Q：签名/发信失败会让签到白跑吗？**
 签到本身不受影响，账号该签的都签了，只是邮件没发出去。

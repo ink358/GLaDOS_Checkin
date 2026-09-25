@@ -513,6 +513,26 @@ def send_email(mail: MailSettings, receivers: List[str], subject: str, html_cont
 
 
 # ---------------------------------------------------------------- GLaDOS 接口
+# Cookie 失效时 GLaDOS 不会返回 401/403，而是 HTTP 200 + {"code": -2, "message": "没有权限"}。
+# 不单独判断的话，日志里只会看到「没有权限」或空的 status 字段，很难判断到底是 Cookie 问题还是站点故障。
+AUTH_ERROR_CODES = (-2,)
+AUTH_ERROR_MARKERS = ("没有权限", "unauthorized", "not authorized", "forbidden")
+AUTH_FAILED_HINT = "Cookie 无效或已过期（GLaDOS 返回「没有权限」），请重新登录 glados.one 后更新 Cookie"
+AUTH_FAILED_DAYS = "获取失败（Cookie 无效）"
+
+
+def _is_auth_error(payload: Dict[str, object]) -> bool:
+    """判断响应是不是「Cookie 没通过认证」"""
+    try:
+        code = int(payload.get("code", 0))
+    except (ValueError, TypeError):
+        code = 0
+    if code in AUTH_ERROR_CODES:
+        return True
+    message = str(payload.get("message", "")).strip().lower()
+    return any(marker in message for marker in AUTH_ERROR_MARKERS)
+
+
 def _glados_headers(cookie: str, with_json: bool = False) -> Dict[str, str]:
     headers = {
         "User-Agent": USER_AGENT,
@@ -571,6 +591,9 @@ def get_points_history(cookie: str, limit: int = 7) -> Tuple[int, List[Dict[str,
         resp = requests.get(POINTS_URL, headers=_glados_headers(cookie), timeout=10)
         resp.raise_for_status()
         data = resp.json()
+        if _is_auth_error(data):
+            print(f"  获取积分失败：{AUTH_FAILED_HINT}")
+            return 0, []
         current_points_str = data.get("points", "0")
         current_points = int(float(current_points_str))
         history_raw = data.get("history", [])
@@ -625,6 +648,8 @@ def get_status_info(cookie: str) -> Tuple[str, str]:
         status_resp = requests.get(STATUS_URL, headers=_glados_headers(cookie), timeout=10)
         if status_resp.status_code == 200:
             status_data = status_resp.json()
+            if _is_auth_error(status_data):
+                return AUTH_FAILED_DAYS, f"cookie:{_short_hash(cookie)} 账号:认证失败（Cookie 无效或已过期）"
             data = status_data.get("data", {}) or {}
             left_days = data.get("leftDays", "0")
             field, identity = _find_identity(data)
@@ -673,6 +698,10 @@ def do_checkin(cookie: str) -> Tuple[int, bool, str, Optional[int]]:
     points_gained_raw = data.get("points", 0)
     message_raw = data.get("message", "")
     list_data = data.get("list", [])
+
+    # Cookie 失效是最常见的问题，单独报出来并给出可操作的提示
+    if _is_auth_error(data):
+        return 0, False, f"签到失败：{AUTH_FAILED_HINT}", None
 
     # 当前总积分（从最新记录中获取 balance）
     current_points = None
@@ -807,7 +836,76 @@ def write_step_summary(results: List[Dict[str, object]]) -> None:
         f.write("\n".join(lines) + "\n")
 
 
+def check_cookie_cli(cookie: str) -> int:
+    """
+    本地校验 Cookie 是否有效：只读，不会签到、不消耗当天签到次数。
+    改完 Cookie 先本地确认能通过认证，再写进 GitHub secret，省得等 Actions 跑完才知道。
+    """
+    cookie = (cookie or "").strip()
+    if not cookie:
+        print("用法：")
+        print('  python GLaDOS_Checkin.py --check-cookie "koa:sess=...; koa:sess.sig=..."')
+        print('  echo "koa:sess=...; koa:sess.sig=..." | python GLaDOS_Checkin.py --check-cookie')
+        return 2
+
+    print("== 仅校验 Cookie（只读，不会执行签到）==")
+    if "koa:sess" not in cookie:
+        print("⚠️  Cookie 里没有 koa:sess。GLaDOS 的会话 Cookie 是 HttpOnly 的，")
+        print("    document.cookie 取不到，请从「开发者工具 → 应用/Application → Cookie」")
+        print("    或「网络/Network → 某个 glados.one 请求 → 请求头里的 Cookie」复制。")
+    if "koa:sess.sig" not in cookie:
+        print("⚠️  Cookie 里没有 koa:sess.sig。这对 Cookie 必须成对，缺签名会话就无效。")
+
+    try:
+        resp = requests.get(STATUS_URL, headers=_glados_headers(cookie), timeout=15)
+    except requests.exceptions.RequestException as e:
+        print(f"❌ 网络请求失败：{e}")
+        return 1
+
+    if resp.status_code != 200:
+        print(f"❌ 请求失败：HTTP {resp.status_code}")
+        return 1
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        print(f"❌ 返回内容不是 JSON：{resp.text[:200]}")
+        return 1
+
+    if _is_auth_error(payload):
+        print(f"❌ Cookie 无效：GLaDOS 返回 {payload}")
+        print(f"   {AUTH_FAILED_HINT}")
+        print("   按顺序排查：")
+        print("     1. 是不是只复制了 koa:sess、漏了 koa:sess.sig（必须成对复制）")
+        print("     2. 两个值是不是同一次、同一时刻复制的：浏览器一动就会刷新这两条 Cookie，")
+        print("        旧的 koa:sess 配新的 koa:sess.sig，签名校验必然失败")
+        print("     3. 复制之后浏览器是不是又登录过/退出过，把那个会话作废了")
+        print("     4. 域名对不对：glados.one 才是本脚本用的站点")
+        return 1
+
+    data = payload.get("data", {}) or {}
+    field, identity = _find_identity(data)
+    left_days = data.get("leftDays", "?")
+    print("✅ Cookie 有效")
+    print(f"   登录账号：{identity if field else '（接口未返回账号标识）'}")
+    print(f"   剩余服务天数：{left_days}")
+
+    current_points, history = get_points_history(cookie, 3)
+    print(f"   当前总积分：{current_points}")
+    if history:
+        print("   最近积分变动：")
+        for rec in history:
+            print(f"     {rec['date']}  {rec['change']}  ->  {rec['balance']}  ({rec['reason']})")
+    print("\n这个 Cookie 可以直接写进 GitHub secret 了。")
+    return 0
+
+
 def main() -> int:
+    args = sys.argv[1:]
+    if args and args[0] in ("--check-cookie", "-c", "--check"):
+        cookie = args[1] if len(args) > 1 else sys.stdin.read()
+        return check_cookie_cli(cookie)
+
     print(f"=== GLaDOS 签到开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
 
     try:

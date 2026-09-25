@@ -101,6 +101,8 @@ plan = plan200
 规则：
 
 - `[account]` 出现几次就是几个账号，每个账号会收到**自己那封**邮件。
+- **Cookie 前面一定要写 `cookie = `。** 直接粘一整行 Cookie 进去会被当成别的键名，账号会被当成「没配 Cookie」而跳过（脚本现在会兜底识别并提醒你补上，但最好一次写对）。
+- **Cookie 里的 `; ` 分隔符不能丢。** 从浏览器界面复制时折行很容易把两条粘成一条（例如 `gld:sess.sig=pefz...IVskoa:sess.sig=TNt...`），签名值被污染后必定登录失败。稳妥做法是从 Network 面板复制请求头里那一整行。
 - `[mail]` 段写发信配置；也可以省略段头，把发信配置直接写在最前面。
 - 键名不区分大小写，`=` 和 `:` 都行，`#` 开头是注释，行尾 ` # 注释` 也可以。
 - 账号里的 `mail_to` / `plan` / 发信字段会**覆盖**全局配置；没写的就继承全局。
@@ -230,9 +232,24 @@ GLADOS_COOKIE='koa:sess=...' MAIL_USER='you@qq.com' MAIL_PASS='授权码' MAIL_T
 3. 复制之后浏览器又登录过/退出过，会话已被服务端作废；
 4. 域名不对：本脚本用 `glados.one`，其它域名是另一套会话。
 
-本地跑 `python GLaDOS_Checkin.py --check-cookie "<你的 Cookie>"` 可以直接确认，不用等 Actions。
+本地跑 `python GLaDOS_Checkin.py --check-cookie "<你的 Cookie>"` 可以直接确认，不用等 Actions。它会顺带检查 Cookie 串本身：成对的 `.sig` 有没有缺、有没有两条被粘在一起、同一个名字是不是出现了两次且值不同。
+
+**Q：日志写「跳过一条没有 cookie 的账号配置」，或者「未找到任何账号配置」？**
+
+`[account]` 段里那行 Cookie 少了 `cookie = ` 前缀。写成 `koa:sess=...` 时，脚本按 `键 = 值` 解析会把键名读成 `koa`，Cookie 就丢了。改写成：
+
+```ini
+cookie = koa:sess=xxxx; koa:sess.sig=yyyy; ...
+```
+
+（新版已能兜底识别这种写法并打印提示，但仍建议按上面的写法规范填写。）
+
+**Q：Cookie 看起来是对的，站点还是回「没有权限」？**
+
+检查 Cookie 里两条有没有被粘成一条。从浏览器 cookie 列表里复制时，折行处容易丢掉 `; `，出现 `...IVskoa:sess.sig=...` 这种形状，被粘住的那条签名值就是坏的。用 `--check-cookie` 会直接点出来；最稳妥的是从 **Network → 某个 glados.one 请求 → 请求头 Cookie** 复制一整行。
 
 **Q：提示 Cookie 不含 `koa:sess`？**
+
 Cookie 复制不完整或已失效。`koa:sess` 是 HttpOnly 的，用 `document.cookie` 取不到，请从 Network 面板的请求头或 Application → Cookies 重新抓一份完整 Cookie，先本地 `--check-cookie` 验一下再更新 secret。
 
 **Q：签名/发信失败会让签到白跑吗？**

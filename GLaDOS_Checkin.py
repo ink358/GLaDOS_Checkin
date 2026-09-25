@@ -171,6 +171,68 @@ def _strip_inline_comment(line: str) -> str:
     return line.strip()
 
 
+# 配置文件里认识的键名。[account] 段里出现「不认识、又长得像 Cookie」的行时，
+# 按「直接粘贴的 Cookie」处理——用户经常忘了在 Cookie 前面写 `cookie = `。
+KNOWN_CONFIG_KEYS = {
+    "name", "label", "remark", "note", "备注",
+    "cookie", "cookies", "glados_cookie", "glados_cookies", "token",
+    "mail_to", "to", "email", "emails", "mail", "收件邮箱",
+    "plan", "exchange_plan",
+    "provider", "mail_provider", "api_key", "resend_api_key", "mail_api_key",
+    "from", "mail_from", "sender", "mail_sender",
+    "smtp_server", "smtp_host", "server", "smtp_port", "port",
+    "user", "smtp_user", "mail_user",
+    "pass", "password", "smtp_pass", "mail_pass", "auth_code", "authorization_code",
+}
+# GLaDOS 登录后的会话 Cookie 名（成对出现，缺一个就是未登录）
+SESSION_COOKIE_NAMES = ("koa:sess", "gld:sess")
+
+
+def check_cookie_shape(cookie: str) -> List[str]:
+    """
+    检查 Cookie 串自身的常见问题，返回人类可读的警告列表。
+    Cookie 没通过认证时，问题经常出在复制环节而不是账号本身，这里先把这些坑挑出来。
+    """
+    cookie = cookie or ""
+    warnings: List[str] = []
+
+    if not any(name in cookie for name in SESSION_COOKIE_NAMES):
+        warnings.append("Cookie 里既没有 koa:sess 也没有 gld:sess，不像是登录后的会话 Cookie")
+
+    for name in SESSION_COOKIE_NAMES:
+        if name in cookie and f"{name}.sig" not in cookie:
+            warnings.append(f"缺少 {name}.sig：签名 Cookie 必须成对，少一个服务端一定判为未登录")
+
+    # 同一个名字出现两次且值不同 = 两次复制混在了一起
+    seen: Dict[str, str] = {}
+    for part in cookie.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        name = name.strip()
+        if name in seen and seen[name] != value:
+            warnings.append(f"{name} 出现了两次且值不同：Cookie 是两次复制混在一起的，要重新完整复制一次")
+        seen[name] = value
+
+    # 少写分隔符，两条 Cookie 粘在一起（浏览器界面折行时复制容易出这个问题）
+    for name in SESSION_COOKIE_NAMES:
+        start = 0
+        glued = False
+        while True:
+            idx = cookie.find(name, start)
+            if idx < 0:
+                break
+            if idx > 0 and cookie[idx - 1] not in "; \t":
+                glued = True
+                break
+            start = idx + len(name)
+        if glued:
+            warnings.append(f"「{name}」前面少了 `; `，两条 Cookie 粘在一起了，值已被污染")
+
+    return warnings
+
+
 def _parse_config_text(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
     """
     解析统一配置文本，返回 (全局配置字典, [账号字典, ...])
@@ -229,7 +291,15 @@ def _parse_config_text(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]
         if not key or not value:
             continue
 
-        (current if current is not None else global_raw)[key] = value
+        target = current if current is not None else global_raw
+        # 常见误填：直接把 Cookie 粘进来、忘了写 `cookie = `。那样第一个 `:` 会被当成
+        # 键值分隔符（键名变成 `koa`/`gld`），Cookie 整个丢掉，账号被当成没配置。
+        if key not in KNOWN_CONFIG_KEYS and any(name in line for name in SESSION_COOKIE_NAMES):
+            target["cookie"] = line
+            print("提示：检测到一行像是直接粘贴的 Cookie，已按 cookie 处理（建议写成 `cookie = ...`）")
+            continue
+
+        target[key] = value
 
     return global_raw, accounts
 
@@ -352,9 +422,12 @@ def load_config() -> Tuple[Dict[str, str], List[Account]]:
         cookie = _pick(raw, "cookie", "glados_cookie", "token", "cookies")
         if not cookie:
             print(f"跳过一条没有 cookie 的账号配置：{raw}")
+            print("  提示：账号段里要写一行 `cookie = koa:sess=...; koa:sess.sig=...`，")
+            print("        等号左边是 `cookie`；直接把 Cookie 粘进来会被当成别的键名。")
             continue
-        if "koa:sess" not in cookie:
-            print("提示：该 Cookie 看起来不含 koa:sess，请确认复制的是完整 Cookie")
+        label = _pick(raw, "name", "label", "remark", "note", "备注") or "该账号"
+        for warning in check_cookie_shape(cookie):
+            print(f"警告（{label}）：{warning}")
         accounts.append(
             Account(
                 cookie=cookie,
@@ -849,12 +922,16 @@ def check_cookie_cli(cookie: str) -> int:
         return 2
 
     print("== 仅校验 Cookie（只读，不会执行签到）==")
-    if "koa:sess" not in cookie:
-        print("⚠️  Cookie 里没有 koa:sess。GLaDOS 的会话 Cookie 是 HttpOnly 的，")
-        print("    document.cookie 取不到，请从「开发者工具 → 应用/Application → Cookie」")
-        print("    或「网络/Network → 某个 glados.one 请求 → 请求头里的 Cookie」复制。")
-    if "koa:sess.sig" not in cookie:
-        print("⚠️  Cookie 里没有 koa:sess.sig。这对 Cookie 必须成对，缺签名会话就无效。")
+
+    shape_warnings = check_cookie_shape(cookie)
+    if shape_warnings:
+        print("⚠️  Cookie 本身就有问题，先修这些：")
+        for warning in shape_warnings:
+            print(f"   - {warning}")
+        print("   复制方法：F12 → Network → 点一个 glados.one 的 api/user/... 请求 →")
+        print("   把「请求头」里 Cookie 那一行完整复制（网络面板里的值一定是完整、带分隔符的）。")
+    else:
+        print("   Cookie 格式看起来正常（会话 Cookie 成对、没有粘连）")
 
     try:
         resp = requests.get(STATUS_URL, headers=_glados_headers(cookie), timeout=15)
@@ -875,10 +952,11 @@ def check_cookie_cli(cookie: str) -> int:
     if _is_auth_error(payload):
         print(f"❌ Cookie 无效：GLaDOS 返回 {payload}")
         print(f"   {AUTH_FAILED_HINT}")
+        if shape_warnings:
+            print("   ↑ 上面的格式问题基本就是原因，先按那个重新复制一次。")
         print("   按顺序排查：")
-        print("     1. 是不是只复制了 koa:sess、漏了 koa:sess.sig（必须成对复制）")
-        print("     2. 两个值是不是同一次、同一时刻复制的：浏览器一动就会刷新这两条 Cookie，")
-        print("        旧的 koa:sess 配新的 koa:sess.sig，签名校验必然失败")
+        print("     1. Cookie 是不是两次复制混在一起的（同一个名字出现两次、值还不一样）")
+        print("     2. 复制时是不是漏了 `; `，把两条 Cookie 粘成了一行")
         print("     3. 复制之后浏览器是不是又登录过/退出过，把那个会话作废了")
         print("     4. 域名对不对：glados.one 才是本脚本用的站点")
         return 1

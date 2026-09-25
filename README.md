@@ -34,6 +34,12 @@
 
 > Cookie 等于账号密码，不要提交到仓库、不要发给别人。过期了就重新抓一次，更新 secret 即可。
 
+另外 GLaDOS 还有**设备校验**：登录时它会记下设备（浏览器），之后签到请求必须来自同一个设备，否则返回
+`{"code":4,"reason":"device-mismatch","message":"Automated check-in detected. Please sign in again to continue."}`。
+它按 **User-Agent** 判断设备，所以脚本默认用 Windows + Edge 的 UA。如果你是用手机或 Chrome 登录的，
+就用 `GLADOS_USER_AGENT`（或配置里的 `user_agent`）改成你浏览器的 UA——F12 → Network → 任意请求 →
+请求头里的 `User-Agent` 整行复制即可。日志每次都会打印当前用的 UA，方便比对。
+
 拿不准新 Cookie 能不能用？先本地验一下（只读，不会签到、不消耗当天次数）：
 
 ```bash
@@ -123,6 +129,7 @@ plan = plan200
 | `cookie` | 账号 | GLaDOS Cookie（必填） |
 | `mail_to` | 全局 / 账号 | 收件人，多个用逗号（或分号、空格）分隔 |
 | `plan` | 全局 / 账号 | 兑换计划：`plan100` / `plan200` / `plan500`，默认 `plan500` |
+| `user_agent` | 全局 | 请求用的 User-Agent（别名 `ua`）。GLaDOS 按它比对登录设备，默认是 Windows + Edge；用手机/Chrome 登录的话改成你浏览器的 UA |
 
 用 Resend 的话，把 `[mail]` 段换成（注意 `from` 必须是你在 Resend 验证过的域名）：
 
@@ -144,6 +151,7 @@ from = GLaDOS_Checkin <noreply@你的域名>
 | `GLADOS_COOKIES` | 二选一 | 多个账号，**一行一个 Cookie**；也可以在行尾用 `\|` 追加信息：`cookie \| 备注 \| 收件邮箱 \| 计划` |
 | `GLADOS_COOKIE` | 二选一 | 只有一个账号时用它（老配置继续可用） |
 | `GLADOS_EXCHANGE_PLAN` | 否 | 全局兑换计划，默认 `plan500` |
+| `GLADOS_USER_AGENT` | 否 | 覆盖请求 User-Agent（GLaDOS 按它比对登录设备） |
 | `MAIL_PROVIDER` | 否 | `smtp` / `resend`，一般不用写，脚本会自动判断（有 SMTP 账号就优先 SMTP） |
 | `SMTP_SERVER` / `SMTP_PORT` | 用 SMTP 时 | 默认 `smtp.qq.com` / `465` |
 | `MAIL_USER` / `MAIL_PASS` | 用 SMTP 时 | 邮箱账号 / 授权码 |
@@ -252,6 +260,13 @@ cookie = gld:sess=xxxx; gld:sess.sig=yyyy; ...
 
 **Q：提示 Cookie 不含 `gld:sess`？**
 GLaDOS 用 `gld:sess` 判断登录态，缺了它必定认证失败。会话 Cookie 是 HttpOnly 的，用 `document.cookie` 取不到，请从 Network 面板的请求头（或 Application → Cookies）复制完整 Cookie，先本地 `--check-cookie` 验一下再更新 secret。
+
+**Q：日志写「GLaDOS 判定为自动化签到」/ `device-mismatch` / `Automated check-in detected`？**
+
+Cookie 是有效的，卡在设备校验上。GLaDOS 会记下登录用的设备（按 User-Agent 判断），签到请求必须来自同一设备。
+解决：用**签到用的那个浏览器**重新登录一次，然后把该浏览器的 UA 填进 `GLADOS_USER_AGENT`
+（或配置里写 `user_agent = ...`）。脚本日志会打印它当前使用的 UA，和浏览器 Network 里的对一下即可。
+注意裸 `Mozilla/5.0` 这类简化 UA 会被判成 `Other` 而拒绝。
 
 **Q：签名/发信失败会让签到白跑吗？**
 签到本身不受影响，账号该签的都签了，只是邮件没发出去。

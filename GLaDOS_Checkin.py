@@ -32,10 +32,15 @@ EXCHANGE_URL = "https://glados.one/api/user/exchange"
 
 RESEND_API_URL = "https://api.resend.com/emails"
 
-USER_AGENT = (
+# GLaDOS 会把「登录设备」和当前请求的设备做比对（按 User-Agent 判断），不一致就直接拒绝，
+# 签到接口返回 code 4 + "Automated check-in detected"。所以这里默认用一个 Windows + Edge 的 UA，
+# 和多数人登录时用的浏览器一致。如果你是用手机或 Chrome 登录的，用环境变量 GLADOS_USER_AGENT
+# 或配置里的 user_agent 覆盖成你自己浏览器的 UA。
+DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0"
 )
+USER_AGENT = DEFAULT_USER_AGENT
 
 # 兑换计划：名称 -> (所需积分, 兑换天数)
 PLAN_MAP = {
@@ -183,6 +188,7 @@ KNOWN_CONFIG_KEYS = {
     "smtp_server", "smtp_host", "server", "smtp_port", "port",
     "user", "smtp_user", "mail_user",
     "pass", "password", "smtp_pass", "mail_pass", "auth_code", "authorization_code",
+    "user_agent", "ua",
 }
 # GLaDOS 登录后的会话 Cookie 名（成对出现，缺一个就是未登录）。
 # 注意：GLaDOS 现已改用 gld:sess 判断登录态，只带老式的 koa:sess 一定返回「没有权限」
@@ -404,6 +410,11 @@ def load_config() -> Tuple[Dict[str, str], List[Account]]:
     if os.environ.get("GLADOS_EXCHANGE_PLAN"):
         global_raw.setdefault("plan", os.environ["GLADOS_EXCHANGE_PLAN"])
 
+    # ---- User-Agent：GLaDOS 按它判断设备，与登录浏览器不一致会被判为自动化签到 ----
+    global USER_AGENT
+    override_ua = os.environ.get("GLADOS_USER_AGENT", "") or _pick(global_raw, "user_agent", "ua")
+    USER_AGENT = override_ua.strip() or DEFAULT_USER_AGENT
+
     # ---- 账号信息 ----
     if not account_raws:
         cookie_text = os.environ.get("GLADOS_COOKIES", "") or ""
@@ -611,6 +622,30 @@ def _is_auth_error(payload: Dict[str, object]) -> bool:
     return any(marker in message for marker in AUTH_ERROR_MARKERS)
 
 
+# 设备不一致时签到接口返回（同样是 HTTP 200）：
+# {"code":4,"reason":"device-mismatch","loginDevice":"Windows","currentDevice":"Other",
+#  "message":"Automated check-in detected. Please sign in again to continue."}
+DEVICE_MISMATCH_CODES = (4,)
+DEVICE_MISMATCH_MARKERS = ("automated check-in detected", "device-mismatch", "device mismatch")
+DEVICE_MISMATCH_HINT = (
+    "GLaDOS 判定为自动化签到（请求设备与登录设备不一致）。"
+    "它按 User-Agent 判断设备：请用登录时那个浏览器重新登录一次，"
+    "并把 USER_AGENT 换成该浏览器的 UA（环境变量 GLADOS_USER_AGENT，或配置里写 user_agent）"
+)
+
+
+def _is_device_mismatch(payload: Dict[str, object]) -> bool:
+    """判断响应是不是「设备与登录设备不一致，被判为自动化」"""
+    try:
+        code = int(payload.get("code", 0))
+    except (ValueError, TypeError):
+        code = 0
+    if code in DEVICE_MISMATCH_CODES:
+        return True
+    text = f"{payload.get('reason', '')} {payload.get('message', '')}".lower()
+    return any(marker in text for marker in DEVICE_MISMATCH_MARKERS)
+
+
 def _glados_headers(cookie: str, with_json: bool = False) -> Dict[str, str]:
     headers = {
         "User-Agent": USER_AGENT,
@@ -780,6 +815,10 @@ def do_checkin(cookie: str) -> Tuple[int, bool, str, Optional[int]]:
     # Cookie 失效是最常见的问题，单独报出来并给出可操作的提示
     if _is_auth_error(data):
         return 0, False, f"签到失败：{AUTH_FAILED_HINT}", None
+
+    # 新版的设备校验：UA 与登录设备不一致会被判为自动化签到
+    if _is_device_mismatch(data):
+        return 0, False, f"签到失败：{DEVICE_MISMATCH_HINT}", None
 
     # 当前总积分（从最新记录中获取 balance）
     current_points = None
@@ -1013,7 +1052,9 @@ def main() -> int:
         return 1
 
     total = len(accounts)
-    print(f"共 {total} 个账号待签到\n")
+    print(f"共 {total} 个账号待签到")
+    print(f"请求 User-Agent: {USER_AGENT}")
+    print("（GLaDOS 按它比对登录设备；若报「Automated check-in detected」就把它换成你登录浏览器的 UA）\n")
 
     results: List[Dict[str, object]] = []
     for index, account in enumerate(accounts, 1):

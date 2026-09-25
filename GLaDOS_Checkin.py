@@ -963,7 +963,12 @@ def check_cookie_cli(cookie: str) -> int:
 
     data = payload.get("data", {}) or {}
     field, identity = _find_identity(data)
-    left_days = data.get("leftDays", "?")
+    # 接口给的是浮点字符串（如 557.0000000000000000），这里跟邮件里的显示保持一致
+    left_days_raw = data.get("leftDays", "?")
+    try:
+        left_days = f"{int(float(left_days_raw))} 天"
+    except (ValueError, TypeError):
+        left_days = str(left_days_raw)
     print("✅ Cookie 有效")
     print(f"   登录账号：{identity if field else '（接口未返回账号标识）'}")
     print(f"   剩余服务天数：{left_days}")

@@ -4,11 +4,11 @@
 # 功能：
 #   1. 支持一个或多个 GLaDOS 账号签到（每个账号独立 Cookie、独立兑换计划）
 #   2. 每个账号的签到结果「分别」发送邮件，可发给一个或多个收件人
-#   3. 发信支持 SMTP（推荐，QQ/163/Gmail 等普通邮箱授权码，收件人不受限）
-#      和 Resend API（可选，未验证自有域名时只能发给注册 Resend 用的那个邮箱）
+#   3. 通知渠道：邮件（SMTP / Resend）+ Telegram + Server酱 + PushPlus，可同时开启多个
 #   4. 配置既可以用「一个 secret 搞定」（GLADOS_CONFIG），也可以拆成一组 secrets
+#   5. 存在 TEST secret 时进入「通知测试模式」：只测通知渠道，不执行任何签到
 #
-# 详细配置说明见 README.md
+# 详细配置说明见 README.md；各通知渠道的申请方式与用法见 NOTIFY.md
 from __future__ import annotations
 
 import hashlib
@@ -31,6 +31,11 @@ POINTS_URL = "https://glados.one/api/user/points"
 EXCHANGE_URL = "https://glados.one/api/user/exchange"
 
 RESEND_API_URL = "https://api.resend.com/emails"
+
+# 额外通知渠道（与项目里的邮件并存，可同时开启多个）
+TELEGRAM_API_TEMPLATE = "https://api.telegram.org/bot{token}/sendMessage"
+SERVERCHAN_API_TEMPLATE = "https://sctapi.ftqq.com/{sendkey}.send"
+PUSHPLUS_API_URL = "https://www.pushplus.plus/send"
 
 # GLaDOS 会把「登录设备」和当前请求的设备做比对（按 User-Agent 判断），不一致就直接拒绝，
 # 签到接口返回 code 4 + "Automated check-in detected"。所以这里默认用一个 Windows + Edge 的 UA，
@@ -113,6 +118,36 @@ class MailSettings:
 
 
 @dataclass
+class NotifySettings:
+    """额外通知渠道（Telegram / Server酱 / PushPlus）配置，账号级可覆盖全局"""
+
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    serverchan_sendkey: str = ""
+    pushplus_token: str = ""
+
+    def telegram_ready(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    def serverchan_ready(self) -> bool:
+        return bool(self.serverchan_sendkey)
+
+    def pushplus_ready(self) -> bool:
+        return bool(self.pushplus_token)
+
+    def channels(self) -> List[str]:
+        """返回已配置完整的渠道名（用于日志与测试模式）"""
+        names: List[str] = []
+        if self.telegram_ready():
+            names.append("Telegram")
+        if self.serverchan_ready():
+            names.append("Server酱")
+        if self.pushplus_ready():
+            names.append("PushPlus")
+        return names
+
+
+@dataclass
 class Account:
     cookie: str
     name: str = ""
@@ -189,6 +224,10 @@ KNOWN_CONFIG_KEYS = {
     "user", "smtp_user", "mail_user",
     "pass", "password", "smtp_pass", "mail_pass", "auth_code", "authorization_code",
     "user_agent", "ua",
+    # 额外通知渠道（[telegram] / [serverchan] / [pushplus] 段里的键会带上前缀）
+    "telegram_bot_token", "telegram_token", "telegram_chat_id",
+    "serverchan_sendkey", "serverchan_send_key", "serverchan_key",
+    "pushplus_token",
 }
 # GLaDOS 登录后的会话 Cookie 名（成对出现，缺一个就是未登录）。
 # 注意：GLaDOS 现已改用 gld:sess 判断登录态，只带老式的 koa:sess 一定返回「没有权限」
@@ -255,6 +294,16 @@ def _parse_config_text(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]
         api_key = re_xxxxxxxx
         from = GLaDOS_Checkin <onboarding@resend.dev>
 
+        [telegram]             # 额外通知渠道，段里的键会自动加前缀 telegram_
+        bot_token = 123456:ABC
+        chat_id = 10086
+
+        [serverchan]           # -> serverchan_sendkey
+        sendkey = SCTxxxx
+
+        [pushplus]             # -> pushplus_token
+        token = xxxx
+
         [account]
         name = 主账号
         cookie = koa:sess=xxx; koa:sess.sig=yyy
@@ -268,6 +317,8 @@ def _parse_config_text(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]
     global_raw: Dict[str, str] = {}
     accounts: List[Dict[str, str]] = []
     current: Optional[Dict[str, str]] = None
+    # 通知渠道段（[telegram] 等）里的键统一加前缀，存进全局配置，避免与邮件字段撞名
+    prefix = ""
 
     for raw_line in text.splitlines():
         line = raw_line.replace("\ufeff", "").strip()
@@ -283,8 +334,23 @@ def _parse_config_text(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]
             if section in ("account", "accounts", "账号", "用户"):
                 current = {}
                 accounts.append(current)
-            elif section in ("mail", "smtp", "resend", "global", "default", "全局", "邮件"):
+                prefix = ""
+            elif section in ("mail", "smtp", "resend", "email", "global", "default", "全局", "邮件"):
                 current = None  # 回到全局段
+                prefix = ""
+            elif section in ("telegram", "tg", "电报"):
+                current = None
+                prefix = "telegram_"
+            elif section in ("serverchan", "server酱", "server_chan", "sct", "方糖"):
+                current = None
+                prefix = "serverchan_"
+            elif section in ("pushplus", "push_plus", "push+"):
+                current = None
+                prefix = "pushplus_"
+            else:
+                # 不认识的段头按全局处理，避免它的键被写进上一个账号
+                current = None
+                prefix = ""
             continue
 
         # key = value 或 key: value
@@ -310,7 +376,7 @@ def _parse_config_text(text: str) -> Tuple[Dict[str, str], List[Dict[str, str]]]
             print("提示：检测到一行像是直接粘贴的 Cookie，已按 cookie 处理（建议写成 `cookie = ...`）")
             continue
 
-        target[key] = value
+        target[prefix + key] = value
 
     return global_raw, accounts
 
@@ -368,6 +434,23 @@ def build_mail_settings(global_raw: Dict[str, str], account_raw: Dict[str, str])
     return settings.finalize()
 
 
+def build_notify_settings(global_raw: Dict[str, str], account_raw: Dict[str, str]) -> NotifySettings:
+    """账号级配置覆盖全局配置，合并成最终的通知渠道配置"""
+
+    def pick(*keys: str) -> str:
+        return _pick(account_raw, *keys) or _pick(global_raw, *keys)
+
+    return NotifySettings(
+        telegram_bot_token=pick("telegram_bot_token", "telegram_token", "tg_bot_token", "bot_token"),
+        telegram_chat_id=pick("telegram_chat_id", "tg_chat_id", "chat_id"),
+        serverchan_sendkey=pick(
+            "serverchan_sendkey", "serverchan_send_key", "serverchan_key",
+            "sendkey", "send_key", "sct_sendkey",
+        ),
+        pushplus_token=pick("pushplus_token"),
+    )
+
+
 def load_config() -> Tuple[Dict[str, str], List[Account]]:
     """
     读取配置，返回 (全局配置字典, 账号列表)
@@ -404,6 +487,18 @@ def load_config() -> Tuple[Dict[str, str], List[Account]]:
     for key, value in env_fallback.items():
         if value and not global_raw.get(key):
             global_raw[key] = value
+
+    # ---- 额外通知渠道：统一配置里没写的，用拆分的 secrets 兜底 ----
+    notify_fallback = {
+        "telegram_bot_token": os.environ.get("TG_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        "telegram_chat_id": os.environ.get("TG_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID", ""),
+        "serverchan_sendkey": os.environ.get("SCT_SENDKEY") or os.environ.get("SERVERCHAN_SENDKEY", ""),
+        "pushplus_token": os.environ.get("PUSHPLUS_TOKEN", ""),
+    }
+    for key, value in notify_fallback.items():
+        if value and not global_raw.get(key):
+            global_raw[key] = value
+
     # 全局默认收件邮箱与兑换计划
     if os.environ.get("MAIL_TO"):
         global_raw.setdefault("mail_to", os.environ["MAIL_TO"])
@@ -599,6 +694,136 @@ def send_email(mail: MailSettings, receivers: List[str], subject: str, html_cont
     if mail.provider == "resend":
         return send_email_resend(mail, receivers, subject, html_content)
     return send_email_smtp(mail, receivers, subject, html_content)
+
+
+# ---------------------------------------------------------------- 额外通知渠道
+def build_notify_text(subject, message, account_label="", exchange_msg="", remaining_days="",
+                      current_points=0, history=None, plan_info=None) -> str:
+    """
+    构建纯文本正文，供 Telegram / Server酱 / PushPlus 使用。
+    内容与邮件一致（签到结果、剩余天数、积分、兑换状态、近期积分变化），只是改成了纯文本。
+    """
+    lines = [subject, ""]
+    if account_label:
+        lines.append(f"账号：{account_label}")
+    lines.append(message)
+    if remaining_days:
+        lines.append(f"剩余服务天数：{remaining_days}")
+    lines.append(f"当前总积分：{current_points}")
+    if exchange_msg:
+        lines.append(f"兑换状态：{exchange_msg}")
+    if plan_info:
+        plan_name, req_pts, days = plan_info
+        lines.append(f"目标兑换计划：{plan_name}（需要 {req_pts} 积分，兑换 {days} 天）")
+    if history:
+        lines.append("")
+        lines.append("近期积分变化：")
+        for rec in history:
+            lines.append(f"{rec['date']}  {rec['change']}  ->  {rec['balance']}  ({rec['reason']})")
+    return "\n".join(lines)
+
+
+def send_telegram(settings: NotifySettings, subject: str, text: str) -> Optional[bool]:
+    """通过 Telegram Bot 推送。返回 True/False；未配置返回 None（跳过）"""
+    if not settings.telegram_ready():
+        return None
+    url = TELEGRAM_API_TEMPLATE.format(token=settings.telegram_bot_token)
+    # 不指定 parse_mode，避免正文里的特殊字符（_ * [ ] 等）导致 Markdown 解析失败
+    payload = {
+        "chat_id": settings.telegram_chat_id,
+        "text": f"{subject}\n{text}",
+        "disable_web_page_preview": True,
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+    except requests.exceptions.RequestException as e:
+        print(f"  Telegram 推送失败（网络异常）：{e}")
+        return False
+    if resp.status_code != 200:
+        print(f"  Telegram 推送失败 [{resp.status_code}]：{resp.text[:200]}")
+        return False
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if data.get("ok", True):
+        print("  Telegram 推送成功")
+        return True
+    print(f"  Telegram 推送失败：{str(data.get('description', resp.text))[:200]}")
+    return False
+
+
+def send_serverchan(settings: NotifySettings, subject: str, text: str) -> Optional[bool]:
+    """通过 Server酱（sctapi.ftqq.com）推送。返回 True/False；未配置返回 None（跳过）"""
+    if not settings.serverchan_ready():
+        return None
+    url = SERVERCHAN_API_TEMPLATE.format(sendkey=settings.serverchan_sendkey)
+    try:
+        resp = requests.post(url, data={"title": subject, "desp": text}, timeout=20)
+    except requests.exceptions.RequestException as e:
+        print(f"  Server酱 推送失败（网络异常）：{e}")
+        return False
+    if resp.status_code != 200:
+        print(f"  Server酱 推送失败 [{resp.status_code}]：{resp.text[:200]}")
+        return False
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    # Server酱 成功时 code == 0（HTTP 也可能返回 200，所以必须看业务 code）
+    if str(data.get("code", 0)) == "0":
+        print("  Server酱 推送成功")
+        return True
+    print(f"  Server酱 推送失败：code={data.get('code')} {str(data.get('message', ''))[:200]}".strip())
+    return False
+
+
+def send_pushplus(settings: NotifySettings, subject: str, text: str) -> Optional[bool]:
+    """通过 PushPlus 推送。返回 True/False；未配置返回 None（跳过）"""
+    if not settings.pushplus_ready():
+        return None
+    payload = {
+        "token": settings.pushplus_token,
+        "title": subject,
+        "content": text,
+        "template": "txt",
+    }
+    try:
+        resp = requests.post(PUSHPLUS_API_URL, json=payload, timeout=20)
+    except requests.exceptions.RequestException as e:
+        print(f"  PushPlus 推送失败（网络异常）：{e}")
+        return False
+    if resp.status_code != 200:
+        print(f"  PushPlus 推送失败 [{resp.status_code}]：{resp.text[:200]}")
+        return False
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    # PushPlus 成功时 code == 200
+    if str(data.get("code")) == "200":
+        print("  PushPlus 推送成功")
+        return True
+    print(f"  PushPlus 推送失败：code={data.get('code')} {str(data.get('msg', ''))[:200]}".strip())
+    return False
+
+
+def send_notifications(settings: NotifySettings, subject: str, text: str) -> Optional[bool]:
+    """
+    向所有已配置的额外渠道推送同一条消息。
+    返回 True（全部成功）/ False（有失败）；一个渠道都没配时返回 None（跳过）。
+    """
+    configured = settings.channels()
+    if not configured:
+        return None
+    print(f"  正在推送通知到：{'、'.join(configured)}")
+    results = [
+        send_telegram(settings, subject, text),
+        send_serverchan(settings, subject, text),
+        send_pushplus(settings, subject, text),
+    ]
+    attempted = [r for r in results if r is not None]
+    return all(attempted) if attempted else None
 
 
 # ---------------------------------------------------------------- GLaDOS 接口
@@ -912,6 +1137,20 @@ def run_account(account: Account, global_raw: Dict[str, str], label: str) -> Dic
     mail_settings = build_mail_settings(global_raw, account.mail_raw)
     mail_sent = send_email(mail_settings, account.mail_to, subject, html_content)
 
+    # 额外通知渠道：同一个账号的结果也推一份（每个渠道独立，失败不影响其他渠道）
+    notify_settings = build_notify_settings(global_raw, account.mail_raw)
+    notify_text = build_notify_text(
+        subject=subject,
+        message=body_msg,
+        account_label=label,
+        exchange_msg=exchange_msg,
+        remaining_days=remaining_days_str,
+        current_points=current_points,
+        history=history,
+        plan_info=plan_info,
+    )
+    notify_sent = send_notifications(notify_settings, subject, notify_text)
+
     print(f"  {datetime.now()} - {subject} - {body_msg}")
 
     return {
@@ -923,6 +1162,7 @@ def run_account(account: Account, global_raw: Dict[str, str], label: str) -> Dic
         "remaining_days": remaining_days_str,
         "exchange_msg": exchange_msg,
         "mail_sent": mail_sent,
+        "notify_sent": notify_sent,
     }
 
 
@@ -934,19 +1174,20 @@ def write_step_summary(results: List[Dict[str, object]]) -> None:
     lines = [
         "## GLaDOS 签到结果",
         "",
-        "| 账号 | 结果 | 当前积分 | 剩余天数 | 兑换状态 | 邮件 |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| 账号 | 结果 | 当前积分 | 剩余天数 | 兑换状态 | 邮件 | 推送 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    mail_text = {True: "已发送", False: "发送失败", None: "未配置"}
+    state_text = {True: "已发送", False: "发送失败", None: "未配置"}
     for r in results:
         lines.append(
-            "| {label} | {state} | {points} | {days} | {exchange} | {mail} |".format(
+            "| {label} | {state} | {points} | {days} | {exchange} | {mail} | {notify} |".format(
                 label=r["label"],
                 state=("✅ " if r["success"] else "❌ ") + str(r["message"]),
                 points=r["current_points"],
                 days=r["remaining_days"],
                 exchange=str(r["exchange_msg"]).replace("|", "/") or "-",
-                mail=mail_text.get(r["mail_sent"], "-"),
+                mail=state_text.get(r.get("mail_sent"), "-"),
+                notify=state_text.get(r.get("notify_sent"), "-"),
             )
         )
     with open(path, "a", encoding="utf-8") as f:
@@ -1033,19 +1274,104 @@ def check_cookie_cli(cookie: str) -> int:
     return 0
 
 
+def _test_mode_enabled(raw: str) -> bool:
+    """
+    是否进入「通知测试模式」。
+
+    GitHub 里 secret 不存在时，环境变量是空字符串，所以「非空」就等于「secret 存在」。
+    想关闭就删除该 secret；写成 0 / false / no / off 也视为关闭，方便临时停用而不必删 secret。
+    """
+    value = (raw or "").strip()
+    if not value:
+        return False
+    return value.lower() not in ("0", "false", "no", "off")
+
+
+def notify_test(global_raw: Dict[str, str], accounts: List[Account]) -> int:
+    """
+    TEST secret 存在时的流程：只测通知渠道，完全不碰签到 / 兑换。
+    邮件与 Telegram / Server酱 / PushPlus 各发一条测试消息，返回 0 表示全部成功。
+    """
+    print("== 通知测试模式（TEST secret 存在）==")
+    print("本次不会执行任何签到 / 兑换，只测试通知渠道是否配置正确。\n")
+
+    first_raw = accounts[0].mail_raw if accounts else {}
+    notify_settings = build_notify_settings(global_raw, first_raw)
+    mail_settings = build_mail_settings(global_raw, first_raw)
+
+    # 收件人：全局配置 + 各账号配置里出现的邮箱，去重后合并
+    receivers: List[str] = []
+    for addr in _split_list(_pick(global_raw, "mail_to", "to", "email", "emails")):
+        if addr not in receivers:
+            receivers.append(addr)
+    for account in accounts:
+        for addr in account.mail_to:
+            if addr not in receivers:
+                receivers.append(addr)
+
+    channels = notify_settings.channels()
+    print(f"推送渠道：{'、'.join(channels) if channels else '无（Telegram / Server酱 / PushPlus 均未配置）'}")
+    print(f"邮件收件人：{_mask_recipients(receivers) if receivers else '无'}")
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subject = "✅ GLaDOS 通知测试"
+    text = (
+        "这是一条 GLaDOS 签到脚本发出的测试通知。\n"
+        f"发送时间：{now}\n"
+        "收到这条消息说明该通知渠道配置正确。\n"
+        "（TEST secret 存在时脚本只做通知测试，不会执行签到。）"
+    )
+
+    print("\n开始发送测试通知…")
+    # 邮件复用同一套 HTML 模板，确保测试邮件和真实签到邮件的格式一致
+    mail_sent = send_email(
+        mail_settings,
+        receivers,
+        subject,
+        build_email_html(subject=subject, message="这是一条测试邮件，收到即表示邮件渠道配置正确。",
+                         current_points="—"),
+    )
+    if mail_sent is None:
+        print("  邮件：未配置收件人或发信信息不完整，跳过")
+    notify_sent = send_notifications(notify_settings, subject, text)
+
+    results = [r for r in (mail_sent, notify_sent) if r is not None]
+    if not results:
+        print("\n❌ 没有任何通知渠道被实际测试（都未配置完整）")
+        print("   请按 NOTIFY.md 配置邮件 / Telegram / Server酱 / PushPlus 至少一种。")
+        return 1
+    if all(results):
+        print("\n✅ 测试通知全部发送成功")
+        return 0
+    print("\n❌ 测试通知存在失败渠道，请检查上面的日志")
+    return 1
+
+
 def main() -> int:
     args = sys.argv[1:]
     if args and args[0] in ("--check-cookie", "-c", "--check"):
         cookie = args[1] if len(args) > 1 else sys.stdin.read()
         return check_cookie_cli(cookie)
 
-    print(f"=== GLaDOS 签到开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+    # 测试模式：命令行 --test / --notify-test，或 TEST secret 存在
+    test_mode = bool(args) and args[0] in ("--test", "--notify-test", "--test-notify")
+    if not test_mode:
+        test_mode = _test_mode_enabled(os.environ.get("TEST", "") or os.environ.get("GLADOS_TEST", ""))
+
+    if test_mode:
+        print(f"=== GLaDOS 通知测试 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+    else:
+        print(f"=== GLaDOS 签到开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
 
     try:
         global_raw, accounts = load_config()
     except Exception as e:
         print(f"配置解析失败：{e}")
         return 1
+
+    # 测试模式不签到，因此不需要账号 Cookie
+    if test_mode:
+        return notify_test(global_raw, accounts)
 
     if not accounts:
         print("未找到任何账号配置。请检查 GLADOS_CONFIG / GLADOS_COOKIES / GLADOS_COOKIE 是否已设置。")
@@ -1073,6 +1399,7 @@ def main() -> int:
                 "remaining_days": "-",
                 "exchange_msg": "",
                 "mail_sent": False,
+                "notify_sent": None,
             })
         print("")
 
@@ -1084,7 +1411,7 @@ def main() -> int:
     for r in results:
         state = "成功" if r["success"] else "失败"
         print(f"  {r['label']}：{state} - {r['message']}")
-        if not r["success"] or r["mail_sent"] is False:
+        if not r["success"] or r.get("mail_sent") is False or r.get("notify_sent") is False:
             failed.append(str(r["label"]))
 
     if failed:

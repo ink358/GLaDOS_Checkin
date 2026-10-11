@@ -36,6 +36,15 @@ jobs:
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
           # 收件人
           MAIL_TO: ${{ secrets.MAIL_TO }}
+          # 额外通知渠道（可选，用法见 NOTIFY.md）
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          SCT_SENDKEY: ${{ secrets.SCT_SENDKEY }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          # 请求 User-Agent（GLaDOS 按它比对登录设备，默认 Windows + Edge）
+          GLADOS_USER_AGENT: ${{ secrets.GLADOS_USER_AGENT }}
+          # 通知测试模式：TEST secret 存在（非空）时只测通知渠道，不执行签到
+          TEST: ${{ secrets.TEST }}
         run: python GLaDOS_Checkin.py
 
   keepalive:

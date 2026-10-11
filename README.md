@@ -5,10 +5,12 @@
 - ✅ 多账号：一个 Cookie 一行，账号数量不限
 - ✅ 每个账号一封独立邮件，收件人可以按账号分别指定（也可以一个账号发给多个邮箱）
 - ✅ 发信走 **SMTP**（推荐）：QQ / 163 / Gmail 等普通邮箱的授权码，收件人想发给谁就发给谁
-- ✅ 也支持 Resend API，但它要求你自己拥有域名才能发给别人，详见下方「关于 Resend」
+- ✅ 通知渠道还支持 **Telegram / Server酱 / PushPlus**，可同时开启多个
+- ✅ 也支持 Resend API，但它要求你自己拥有域名才能发给别人
 - ✅ 邮件正文沿用原格式：签到结果 + 剩余天数 + 当前积分 + 兑换状态 + 目标兑换计划 + 近 7 天积分变化表
 - ✅ 敏感信息只放 GitHub Secrets，仓库里不出现任何 Cookie / API Key / 授权码
 - ✅ 配置可以「一个 secret 搞定」，也可以拆成一组 secrets，怎么顺手怎么来
+- 📖 **各通知渠道的申请步骤与用法见 [NOTIFY.md](NOTIFY.md)**
 
 ---
 
@@ -16,7 +18,7 @@
 
 1. Fork / 克隆本仓库。
 2. 准备好每个账号的 GLaDOS Cookie（见下方「怎么拿 Cookie」）。
-3. 准备一个邮箱的 SMTP 授权码（见下方「怎么拿 SMTP 授权码」）。
+3. 准备通知渠道的凭据（最省事的是一个邮箱的 SMTP 授权码；也支持 Telegram / Server酱 / PushPlus，见 [NOTIFY.md](NOTIFY.md)）。
 4. 到仓库 **Settings → Secrets and variables → Actions → New repository secret** 添加 secret（见下方配置说明）。
 5. 到 **Actions → GLaDOS Daily Checkin → Run workflow** 手动跑一次，看日志确认成功。
 
@@ -48,30 +50,15 @@ python GLaDOS_Checkin.py --check-cookie "gld:sess=xxxx; gld:sess.sig=yyyy"
 
 有效会打印登录账号、剩余天数、当前积分；无效会直接告诉你是缺了 `.sig`，还是两个值不是同一时刻复制的。
 
-### 怎么拿 SMTP 授权码（推荐）
+### 怎么配通知渠道
 
-用你平时收信的那个邮箱，开启 SMTP 服务，生成一串**授权码**——注意它不是邮箱登录密码：
+支持 **邮件（SMTP / Resend）、Telegram、Server酱、PushPlus**，可以同时开多个，每个账号的结果都会分别推送。
 
-| 邮箱 | 服务器 | 端口 | 授权码在哪生成 |
-| --- | --- | --- | --- |
-| QQ 邮箱 | `smtp.qq.com` | 465 | 设置 → 账户 → 开启「SMTP 服务」→ 生成授权码 |
-| 163 邮箱 | `smtp.163.com` | 465 | 设置 → POP3/SMTP/IMAP → 开启服务 → 新增授权码 |
-| Gmail | `smtp.gmail.com` | 587 | 先开启两步验证，再到「应用专用密码」生成 |
-| Outlook / Office365 | `smtp.office365.com` | 587 | 账户安全 → 高级安全选项 → 应用密码 |
+各渠道的申请步骤、配置字段、对应的独立 secret 名，以及「只测通知、不签到」的 `TEST` secret 用法，
+全部整理在 **[NOTIFY.md](NOTIFY.md)** 里，照着抄即可。
 
-> 端口 465 走 SSL，其他端口（587 等）走 STARTTLS，脚本自动判断。
-> SMTP 对收件人没有任何限制，一个账号想同时发给几个邮箱，逗号隔开写就行。
-
-### 关于 Resend（可选，需要自有域名）
-
-[Resend](https://resend.com/) 的 API 用起来确实干净，但**不建议没有自己域名的人用**，它的免费发件人有硬限制：
-
-- 没验证域名时只能用 `onboarding@resend.dev` 发信，而且**只能发给你注册 Resend 用的那个邮箱**。发给其他任何地址都会整封失败，报 `403 You can only send testing emails to your own email address`——注意是整封失败，不是只跳过那一个收件人。
-- 想发给别人（比如把签到结果发到 QQ 邮箱），必须先 **Domains → Add Domain** 验证一个**你自己拥有的域名**，再把 `from` 改成 `你的名字 <noreply@你的域名>`。
-
-也就是说，除非你手上正好有个域名可以做 DNS 验证，否则用 SMTP 更省事，收件人也自由。
-
-如果你确实要用 Resend：<https://resend.com/> 用 GitHub 账号登录 → **API Keys → Create API Key**（权限选 `Sending access` 就够）→ 复制 `re_` 开头的 Key（只显示一次，记得存好），然后按下面的配置写。
+最省事的是邮件：用你平时收信的那个邮箱开启 SMTP 服务、生成一串**授权码**（注意它不是邮箱登录密码），
+填进 `[mail]` 段就行 —— 详见 [NOTIFY.md 第 1 节](NOTIFY.md#1-邮件smtp推荐)。
 
 ---
 
@@ -112,6 +99,7 @@ plan = plan200
 - **Cookie 前面一定要写 `cookie = `。** 直接粘一整行 Cookie 进去会被当成别的键名，账号会被当成「没配 Cookie」而跳过（脚本现在会兜底识别并提醒你补上，但最好一次写对）。
 - **Cookie 里的 `; ` 分隔符不能丢。** 从浏览器界面复制时折行很容易把两条粘成一条（例如 `gld:sess.sig=pefz...IVskoa:sess.sig=TNt...`），签名值被污染后必定登录失败。稳妥做法是从 Network 面板复制请求头里那一整行。
 - `[mail]` 段写发信配置；也可以省略段头，把发信配置直接写在最前面。
+- 额外通知渠道各自一个段：`[telegram]`（`bot_token` / `chat_id`）、`[serverchan]`（`sendkey`）、`[pushplus]`（`token`），段里的键会自动加前缀，详见 [NOTIFY.md](NOTIFY.md)。
 - 键名不区分大小写，`=` 和 `:` 都行，`#` 开头是注释，行尾 ` # 注释` 也可以。
 - 账号里的 `mail_to` / `plan` / 发信字段会**覆盖**全局配置；没写的就继承全局。
 - 只有一个账号时，可以直接写 `cookie = xxx`，不用 `[account]` 段；多个账号用 `cookies = cookie1 && cookie2`。
@@ -130,6 +118,11 @@ plan = plan200
 | `mail_to` | 全局 / 账号 | 收件人，多个用逗号（或分号、空格）分隔 |
 | `plan` | 全局 / 账号 | 兑换计划：`plan100` / `plan200` / `plan500`，默认 `plan500` |
 | `user_agent` | 全局 | 请求用的 User-Agent（别名 `ua`）。GLaDOS 按它比对登录设备，默认是 Windows + Edge；用手机/Chrome 登录的话改成你浏览器的 UA |
+| `telegram_bot_token` / `telegram_chat_id` | 全局 / 账号 | Telegram 推送（也可用 `[telegram]` 段，键写 `bot_token` / `chat_id`）。详见 [NOTIFY.md](NOTIFY.md) |
+| `serverchan_sendkey` | 全局 / 账号 | Server酱 SendKey（也可用 `[serverchan]` 段写 `sendkey`） |
+| `pushplus_token` | 全局 / 账号 | PushPlus Token（也可用 `[pushplus]` 段写 `token`） |
+
+> 通知渠道的申请步骤与完整示例见 **[NOTIFY.md](NOTIFY.md)**。不配 `mail_to` 就不发邮件，只走其它渠道。
 
 用 Resend 的话，把 `[mail]` 段换成（注意 `from` 必须是你在 Resend 验证过的域名）：
 
@@ -158,6 +151,10 @@ from = GLaDOS_Checkin <noreply@你的域名>
 | `RESEND_API_KEY` | 用 Resend 时 | Resend API Key |
 | `MAIL_FROM` | 否 | 发件人；不写则 SMTP 用 `MAIL_USER`、Resend 用 `onboarding@resend.dev` |
 | `MAIL_TO` | 否 | 收件人，多个用逗号分隔。**所有账号**的结果都会分别发到这些地址 |
+| `TG_BOT_TOKEN` / `TG_CHAT_ID` | 用 Telegram 时 | Telegram 机器人 Token / 会话 ID |
+| `SCT_SENDKEY` | 用 Server酱时 | Server酱 SendKey |
+| `PUSHPLUS_TOKEN` | 用 PushPlus 时 | PushPlus Token |
+| `TEST` | 否 | 存在（非空）时只测通知渠道、不执行签到。详见 [NOTIFY.md 第 6 节](NOTIFY.md#6-测试通知test-secret) |
 
 `GLADOS_COOKIES` 的示例（3 个账号，第 3 个用全局收件人）：
 
@@ -178,6 +175,7 @@ gld:sess=a3; gld:sess.sig=b3
 区别只有一处：配置了账号名（`name`）或存在多个账号时，正文里会多一行 `账号：xxx`，用来区分这封邮件是哪个号的。单账号且没写 `name` 时，邮件内容与原来完全一致。
 
 每个账号单独一封邮件，互不影响；某个账号失败也会继续处理下一个。
+如果还配了 Telegram / Server酱 / PushPlus，同一个账号的结果也会再各推一条（纯文本，内容与邮件一致）。
 
 > 日志里收件人会**打码显示**（如 `in***@qq.com`）。因为公开仓库的 Actions 日志任何人可读，所以脚本不会把完整邮箱写进日志；邮件本身当然还是发给完整地址。
 
@@ -197,6 +195,9 @@ pip install requests
 
 # 只想确认某个 Cookie 还有效（只读，不签到）：
 python GLaDOS_Checkin.py --check-cookie "gld:sess=xxxx; gld:sess.sig=yyyy"
+
+# 只测通知渠道能不能收到（不签到、不需要 Cookie）：
+python GLaDOS_Checkin.py --test
 
 # 把配置文本存成 config.local.txt 后：
 GLADOS_CONFIG_FILE=config.local.txt python GLaDOS_Checkin.py
@@ -267,6 +268,9 @@ Cookie 是有效的，卡在设备校验上。GLaDOS 会记下登录用的设备
 解决：用**签到用的那个浏览器**重新登录一次，然后把该浏览器的 UA 填进 `GLADOS_USER_AGENT`
 （或配置里写 `user_agent = ...`）。脚本日志会打印它当前使用的 UA，和浏览器 Network 里的对一下即可。
 注意裸 `Mozilla/5.0` 这类简化 UA 会被判成 `Other` 而拒绝。
+
+**Q：怎么先确认通知渠道配好了？**
+加一个名为 `TEST` 的 repository secret（值随便填），脚本这次就只发测试通知、不执行签到，日志里会逐条列出各渠道是否成功。确认没问题后删掉 `TEST` 即可恢复正常签到。详见 [NOTIFY.md 第 6 节](NOTIFY.md#6-测试通知test-secret)。
 
 **Q：签名/发信失败会让签到白跑吗？**
 签到本身不受影响，账号该签的都签了，只是邮件没发出去。

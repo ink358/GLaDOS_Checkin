@@ -6,7 +6,7 @@
 #   2. 每个账号的签到结果「分别」发送邮件，可发给一个或多个收件人
 #   3. 通知渠道：邮件（SMTP / Resend）+ Telegram + Server酱 + PushPlus，可同时开启多个
 #   4. 配置既可以用「一个 secret 搞定」（GLADOS_CONFIG），也可以拆成一组 secrets
-#   5. 存在 TEST secret 时进入「通知测试模式」：只测通知渠道，不执行任何签到
+#   5. TEST secret 存在时进入「通知测试模式」：把它值里写的渠道拿出来发测试通知，不执行签到
 #
 # 详细配置说明见 README.md；各通知渠道的申请方式与用法见 NOTIFY.md
 from __future__ import annotations
@@ -1278,8 +1278,9 @@ def _test_mode_enabled(raw: str) -> bool:
     """
     是否进入「通知测试模式」。
 
-    GitHub 里 secret 不存在时，环境变量是空字符串，所以「非空」就等于「secret 存在」。
-    想关闭就删除该 secret；写成 0 / false / no / off 也视为关闭，方便临时停用而不必删 secret。
+    TEST secret 存在（非空）即进入；它的值本身就是一份「通知配置」（和 GLADOS_CONFIG 同样的格式），
+    测试通知会发给 **TEST 里写了的**渠道。想关闭就删除该 secret；
+    写成 0 / false / no / off 也算关闭（这些值本来也不是有效的渠道配置）。
     """
     value = (raw or "").strip()
     if not value:
@@ -1287,27 +1288,27 @@ def _test_mode_enabled(raw: str) -> bool:
     return value.lower() not in ("0", "false", "no", "off")
 
 
-def notify_test(global_raw: Dict[str, str], accounts: List[Account]) -> int:
-    """
-    TEST secret 存在时的流程：只测通知渠道，完全不碰签到 / 兑换。
-    邮件与 Telegram / Server酱 / PushPlus 各发一条测试消息，返回 0 表示全部成功。
-    """
-    print("== 通知测试模式（TEST secret 存在）==")
-    print("本次不会执行任何签到 / 兑换，只测试通知渠道是否配置正确。\n")
-
-    first_raw = accounts[0].mail_raw if accounts else {}
-    notify_settings = build_notify_settings(global_raw, first_raw)
-    mail_settings = build_mail_settings(global_raw, first_raw)
-
-    # 收件人：全局配置 + 各账号配置里出现的邮箱，去重后合并
+def _collect_receivers(*sources: Dict[str, str]) -> List[str]:
+    """从若干配置字典里收集收件邮箱，按出现顺序去重"""
     receivers: List[str] = []
-    for addr in _split_list(_pick(global_raw, "mail_to", "to", "email", "emails")):
-        if addr not in receivers:
-            receivers.append(addr)
-    for account in accounts:
-        for addr in account.mail_to:
+    for src in sources:
+        for addr in _split_list(_pick(src, "mail_to", "to", "email", "emails", "mail")):
             if addr not in receivers:
                 receivers.append(addr)
+    return receivers
+
+
+def notify_test(notify_settings: NotifySettings, mail_settings: MailSettings,
+                receivers: List[str], source: str = "") -> int:
+    """
+    通知测试流程：用给定的一组通知配置各发一条测试消息，完全不碰签到 / 兑换。
+    source 只用于日志，说明这批配置是从哪里读来的。返回 0 表示全部成功。
+    """
+    print("== 通知测试模式 ==")
+    print("本次不会执行任何签到 / 兑换，只测试通知渠道是否配置正确。")
+    if source:
+        print(f"测试用的通知配置来自：{source}")
+    print("")
 
     channels = notify_settings.channels()
     print(f"推送渠道：{'、'.join(channels) if channels else '无（Telegram / Server酱 / PushPlus 均未配置）'}")
@@ -1337,8 +1338,12 @@ def notify_test(global_raw: Dict[str, str], accounts: List[Account]) -> int:
 
     results = [r for r in (mail_sent, notify_sent) if r is not None]
     if not results:
-        print("\n❌ 没有任何通知渠道被实际测试（都未配置完整）")
-        print("   请按 NOTIFY.md 配置邮件 / Telegram / Server酱 / PushPlus 至少一种。")
+        print("\n❌ 没有任何通知渠道被实际测试")
+        print("   在 TEST secret 里写上要测试的渠道配置即可，例如：")
+        print("     [telegram]")
+        print("     bot_token = 123456789:AA...")
+        print("     chat_id = 1008610086")
+        print("   支持的渠道与字段见 NOTIFY.md。")
         return 1
     if all(results):
         print("\n✅ 测试通知全部发送成功")
@@ -1353,10 +1358,11 @@ def main() -> int:
         cookie = args[1] if len(args) > 1 else sys.stdin.read()
         return check_cookie_cli(cookie)
 
-    # 测试模式：命令行 --test / --notify-test，或 TEST secret 存在
-    test_mode = bool(args) and args[0] in ("--test", "--notify-test", "--test-notify")
-    if not test_mode:
-        test_mode = _test_mode_enabled(os.environ.get("TEST", "") or os.environ.get("GLADOS_TEST", ""))
+    # 测试模式：命令行 --test / --notify-test，或 TEST secret 存在。
+    # TEST 的值本身就是一份通知配置，测试通知只发给「TEST 里写了的」渠道。
+    cli_test = bool(args) and args[0] in ("--test", "--notify-test", "--test-notify")
+    test_text = (os.environ.get("TEST", "") or os.environ.get("GLADOS_TEST", "")).strip()
+    test_mode = cli_test or _test_mode_enabled(test_text)
 
     if test_mode:
         print(f"=== GLaDOS 通知测试 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
@@ -1369,9 +1375,27 @@ def main() -> int:
         print(f"配置解析失败：{e}")
         return 1
 
-    # 测试模式不签到，因此不需要账号 Cookie
+    # 测试模式不签到，因此也不需要账号 Cookie
     if test_mode:
-        return notify_test(global_raw, accounts)
+        if _test_mode_enabled(test_text):
+            # TEST 的值就是通知配置，只测它里面写了的渠道
+            test_global, test_accounts = _parse_config_text(test_text)
+            test_account_raw = test_accounts[0] if test_accounts else {}
+            print(f"已读取 TEST：全局配置 {len(test_global)} 项，账号块 {len(test_accounts)} 个")
+            return notify_test(
+                build_notify_settings(test_global, test_account_raw),
+                build_mail_settings(test_global, test_account_raw),
+                _collect_receivers(test_global, test_account_raw),
+                source="TEST secret",
+            )
+        # 本地用 --test 且没设 TEST 时，退回测试当前配置里的渠道
+        first_raw = accounts[0].mail_raw if accounts else {}
+        return notify_test(
+            build_notify_settings(global_raw, first_raw),
+            build_mail_settings(global_raw, first_raw),
+            _collect_receivers(global_raw, *[a.mail_raw for a in accounts]),
+            source="当前配置（GLADOS_CONFIG / 拆分的 secrets）",
+        )
 
     if not accounts:
         print("未找到任何账号配置。请检查 GLADOS_CONFIG / GLADOS_COOKIES / GLADOS_COOKIE 是否已设置。")

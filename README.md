@@ -6,6 +6,7 @@
 - ✅ 每个账号一封独立邮件，收件人可以按账号分别指定（也可以一个账号发给多个邮箱）
 - ✅ 发信走 **SMTP**（推荐）：QQ / 163 / Gmail 等普通邮箱的授权码，收件人想发给谁就发给谁
 - ✅ 通知渠道还支持 **Telegram / Server酱 / PushPlus**，可同时开启多个
+- ✅ 想先验证渠道？把那段配置写进 `TEST` secret，脚本就只用它发测试通知、不执行签到
 - ✅ 也支持 Resend API，但它要求你自己拥有域名才能发给别人
 - ✅ 邮件正文沿用原格式：签到结果 + 剩余天数 + 当前积分 + 兑换状态 + 目标兑换计划 + 近 7 天积分变化表
 - ✅ 敏感信息只放 GitHub Secrets，仓库里不出现任何 Cookie / API Key / 授权码
@@ -154,7 +155,7 @@ from = GLaDOS_Checkin <noreply@你的域名>
 | `TG_BOT_TOKEN` / `TG_CHAT_ID` | 用 Telegram 时 | Telegram 机器人 Token / 会话 ID |
 | `SCT_SENDKEY` | 用 Server酱时 | Server酱 SendKey |
 | `PUSHPLUS_TOKEN` | 用 PushPlus 时 | PushPlus Token |
-| `TEST` | 否 | 存在（非空）时只测通知渠道、不执行签到。详见 [NOTIFY.md 第 6 节](NOTIFY.md#6-测试通知test-secret) |
+| `TEST` | 否 | 值就是一份通知配置（格式同 `GLADOS_CONFIG`）。存在时只用它里面写的渠道发测试通知、不执行签到。详见 [NOTIFY.md 第 6 节](NOTIFY.md#6-测试通知test-secret) |
 
 `GLADOS_COOKIES` 的示例（3 个账号，第 3 个用全局收件人）：
 
@@ -197,6 +198,7 @@ pip install requests
 python GLaDOS_Checkin.py --check-cookie "gld:sess=xxxx; gld:sess.sig=yyyy"
 
 # 只测通知渠道能不能收到（不签到、不需要 Cookie）：
+# 设了 TEST 环境变量就测它里面的渠道，没设则测当前配置里的渠道
 python GLaDOS_Checkin.py --test
 
 # 把配置文本存成 config.local.txt 后：
@@ -270,7 +272,7 @@ Cookie 是有效的，卡在设备校验上。GLaDOS 会记下登录用的设备
 注意裸 `Mozilla/5.0` 这类简化 UA 会被判成 `Other` 而拒绝。
 
 **Q：怎么先确认通知渠道配好了？**
-加一个名为 `TEST` 的 repository secret（值随便填），脚本这次就只发测试通知、不执行签到，日志里会逐条列出各渠道是否成功。确认没问题后删掉 `TEST` 即可恢复正常签到。详见 [NOTIFY.md 第 6 节](NOTIFY.md#6-测试通知test-secret)。
+加一个名为 `TEST` 的 repository secret，**值直接写上你要测的那段通知配置**（格式同 `GLADOS_CONFIG`，比如一段 `[telegram]`）。脚本这次就只拿 `TEST` 里的渠道发测试通知、不执行签到，日志里逐条列出成功与否。测完删掉 `TEST` 即可恢复正常签到。详见 [NOTIFY.md 第 6 节](NOTIFY.md#6-测试通知test-secret)。
 
 **Q：签名/发信失败会让签到白跑吗？**
 签到本身不受影响，账号该签的都签了，只是邮件没发出去。

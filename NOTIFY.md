@@ -169,34 +169,68 @@ token = 你的pushplus_token
 
 ## 6. 测试通知：`TEST` secret
 
-添加一个名为 **`TEST`** 的 repository secret（值随便填，比如 `1`）后，脚本进入**通知测试模式**：
+`TEST` 这个 repository secret 的**值本身就是一份通知配置**（格式和 `GLADOS_CONFIG` 一样）。
+只要它存在，脚本就进入**通知测试模式**：
 
 - **不会执行任何签到 / 兑换**，完全不访问 GLaDOS，也不需要账号 Cookie；
-- 用你配置的通知渠道各发一条测试消息（邮件、Telegram、Server酱、PushPlus）；
+- 把 `TEST` 里写的渠道各发一条测试消息；
 - 日志里逐个渠道打印成功 / 失败，方便确认凭据对不对。
 
-所以拿到新 cookie、换邮箱、配新渠道之后，可以先加 `TEST` 跑一次确认通知链路，再删掉 `TEST` 让它照常签到。
+所以你可以把**还没敢填进正式配置**的新凭据先写进 `TEST` 试一下：能收到测试消息，再把它挪进 `GLADOS_CONFIG`。
+
+`TEST` 的值示例（只测 Telegram，就只写 Telegram 段）：
+
+```ini
+[telegram]
+bot_token = 123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxx
+chat_id = 1008610086
+```
+
+也可以同时写多个渠道；邮件用 `[mail]` 段（`mail_to` 就是测试邮件的收件人）：
+
+```ini
+[pushplus]
+token = 你的pushplus_token
+
+[mail]
+provider = smtp
+smtp_server = smtp.qq.com
+smtp_port = 465
+user = 你的QQ号@qq.com
+pass = 邮箱授权码
+mail_to = me@example.com
+```
+
+跑起来长这样（**只会测 `TEST` 里写了的那几个渠道**，正式配置里的渠道不受影响）：
 
 ```text
-=== GLaDOS 通知测试 2026-10-11 22:28:07 ===
-== 通知测试模式（TEST secret 存在）==
-推送渠道：Telegram、Server酱
-邮件收件人：me@example.com
+=== GLaDOS 通知测试 2026-10-11 23:21:46 ===
+已读取 TEST：全局配置 4 项，账号块 0 个
+== 通知测试模式 ==
+测试用的通知配置来自：TEST secret
+
+推送渠道：PushPlus
+邮件收件人：te***@example.com
 开始发送测试通知…
-  Telegram 推送成功
-  Server酱 推送成功
-  SMTP 发信成功：me***@example.com
+  Resend 发信成功：...
+  PushPlus 推送成功
 ✅ 测试通知全部发送成功
 ```
 
-- 想临时关闭：删除 `TEST` secret 即可；把值写成 `0` / `false` / `no` / `off` 也视为关闭。
-- 本地也可以用命令行触发，不用设环境变量：
+- 测完把 `TEST` 这个 secret **删掉**，签到就恢复正常。
+- 想临时停用又不想删：把值改成 `0` / `false` / `no` / `off` 也行。
+- `TEST` 里没有写出任何有效渠道时，脚本会提示一段可照抄的示例，并以退出码 1 结束。
+- 本地也可以触发：
 
   ```bash
+  # 用 TEST 的值测试（把上面那段配置写进环境变量）
+  TEST='[telegram]
+  bot_token = ...
+  chat_id = ...' python GLaDOS_Checkin.py
+
+  # 或者 --test：没设 TEST 时，直接测试当前配置里的渠道
   python GLaDOS_Checkin.py --test
   ```
-
-- 测试模式下没有任何渠道配置完整时，脚本会提示你去看本文件的配置示例。
 
 ---
 
@@ -217,7 +251,7 @@ token = 你的pushplus_token
 | `TG_BOT_TOKEN` / `TG_CHAT_ID` | Telegram 机器人 Token / 会话 ID | 用 Telegram 时 |
 | `SCT_SENDKEY` | Server酱 SendKey | 用 Server酱时 |
 | `PUSHPLUS_TOKEN` | PushPlus Token | 用 PushPlus 时 |
-| `TEST` | 存在即进入通知测试模式，不执行签到 | 否 |
+| `TEST` | 值就是一份通知配置；存在时用它里面写的渠道发测试通知，不执行签到 | 否 |
 
 ---
 

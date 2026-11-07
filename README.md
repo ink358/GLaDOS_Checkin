@@ -11,6 +11,7 @@
 - ✅ 邮件正文沿用原格式：签到结果 + 剩余天数 + 当前积分 + 兑换状态 + 目标兑换计划 + 近 7 天积分变化表
 - ✅ 敏感信息只放 GitHub Secrets，仓库里不出现任何 Cookie / API Key / 授权码
 - ✅ 配置可以「一个 secret 搞定」，也可以拆成一组 secrets，怎么顺手怎么来
+- 🏠 **推荐在本地或自己的服务器上定时运行**：2026-11-04 起 GLaDOS 对数据中心 IP（含 GitHub Actions）的自动签到只发 1 分保底，详见「[六、推荐：在本地或服务器上运行](#六推荐在本地或服务器上运行2026-11-04-起)」；Actions 可以留着当兜底（+1 分 + 失败报警）
 - 📖 **各通知渠道的申请步骤与用法见 [NOTIFY.md](NOTIFY.md)**
 
 ---
@@ -216,7 +217,66 @@ GLADOS_COOKIE='gld:sess=...' MAIL_USER='you@qq.com' MAIL_PASS='授权码' MAIL_T
 
 ---
 
-## 六、常见问题
+## 六、推荐：在本地或服务器上运行（2026-11-04 起）
+
+GLaDOS 已按签到请求的来源分级发积分，以下为实测结论（多账号、多仓库日志一致）：
+
+| 签到来源 | 实测结果 |
+| --- | --- |
+| 登录设备上的浏览器手动签到 | 随机 6~20 分 |
+| GitHub Actions 等数据中心 IP 的自动签到 | **固定保底 1 分**（不拦截、无警告邮件） |
+| 请求设备与登录设备不一致 | 0 分 + 「Automated check-in detected」警告邮件 |
+
+Actions 的出口 IP 属于数据中心，这个降级是站点侧的策略，脚本绕不过去（把 UA 改成与登录浏览器完全一致也照样 1 分，说明判定主要看来源 IP）。
+想让**自动签到**也拿满分，就把脚本挪到住宅网络环境定时跑——本地常开的电脑，或自己的服务器 / 软路由 / NAS。
+
+### Linux / macOS 服务器（cron）
+
+```bash
+git clone https://github.com/ink358/GLaDOS_Checkin.git /opt/GLaDOS_Checkin
+pip3 install requests        # 部分新版系统需要在 venv 里装，或加 --break-system-packages
+
+# 把配置文本（格式与 GLADOS_CONFIG secret 完全相同）存成文件，并收紧权限：
+chmod 600 /opt/GLaDOS_Checkin/config.conf
+```
+
+`crontab -e` 加一行（北京时间每天 00:25，与 Actions 的时刻一致）：
+
+```cron
+25 0 * * * cd /opt/GLaDOS_Checkin && GLADOS_CONFIG_FILE=/opt/GLaDOS_Checkin/config.conf /usr/bin/python3 GLaDOS_Checkin.py >> checkin.log 2>&1
+```
+
+### Windows 电脑（任务计划程序）
+
+存一个 `run.bat`：
+
+```bat
+@echo off
+set GLADOS_CONFIG_FILE=C:\GLaDOS_Checkin\config.conf
+python C:\GLaDOS_Checkin\GLaDOS_Checkin.py >> C:\GLaDOS_Checkin\checkin.log 2>&1
+```
+
+然后建定时任务（管理员命令行，或「任务计划程序」图形界面里建，勾选「不管用户是否登录都要运行」）：
+
+```bat
+schtasks /Create /TN "GLaDOS签到" /SC DAILY /ST 00:25 /TR "C:\GLaDOS_Checkin\run.bat"
+```
+
+### 复用 GitHub Actions：self-hosted runner（不想自己写定时任务）
+
+在一台常开设备上把它注册成仓库的 self-hosted runner（**Settings → Actions → Runners → New self-hosted runner**），
+注册时给它加个自定义 label（如 `home`），再把 workflow 里的 `runs-on: ubuntu-latest` 改成 `runs-on: [self-hosted, home]`。
+设备上要有 Python 3；secrets、通知渠道、失败报警全部照旧，只是出口 IP 换成了你自己的网络。
+
+### 和 Actions 定时任务怎么共存
+
+- Actions 定时任务可以**留着当兜底**：你本地或浏览器手动签到的日子它会显示「今日已签到」——GLaDOS 按 UTC 算「一天」，北京时间白天签到之后，当晚的定时任务就是 0 分，属正常现象；本地没跑成的日子它保底 +1，Cookie 失效或设备不一致时照样红牌 + 邮件报警。
+- 定时都设在北京时间凌晨（如 00:25），正好和白天手动签到错开，互不抢名额。
+- 再强调一次：**不要在别的设备上重新登录抓 Cookie 后跑完整脚本**——那台设备就成了新的「登录设备」，和脚本自称的设备对不上，会直接触发硬拦截 + 警告邮件。本地只验证 Cookie 的话用 `--check-cookie`（只读、不占当天名额，见「五、本地运行 / 调试」）。
+
+---
+
+## 七、常见问题
 
 **Q：Action 变红了怎么办？**
 多账号场景下，只要有一个账号签到失败或邮件发送失败，脚本就以退出码 1 结束，方便你收到 GitHub 的失败通知。日志里会列出具体是哪些账号有问题，Actions 页面的 Summary 还有一张结果表。
@@ -234,7 +294,7 @@ GLADOS_COOKIE='gld:sess=...' MAIL_USER='you@qq.com' MAIL_PASS='授权码' MAIL_T
 大概率是两条 Cookie 填的是同一个账号。日志里每个账号都有一行「账号指纹」，形如 `cookie:6a804c35 账号(email):1c0275f9`：两行 Cookie 哈希不同但 `账号(email)` 哈希相同，就说明这两个 Cookie 属于同一个 GLaDOS 账号，重新登录另一个账号抓一份 Cookie 换上即可。
 
 **Q：邮件里写「今日已签到，明天再来吧」，是失败吗？**
-不是。重复签到算成功，只是没有新积分。
+不是。重复签到算成功，只是没有新积分。另外 GLaDOS 按 UTC 算「一天」：北京时间白天你（或本地定时任务）签到过之后，当晚 Actions 的定时任务就会显示这句。
 
 **Q：日志写「签到失败：…没有权限」，或者指纹显示「认证失败」，怎么办？**
 
